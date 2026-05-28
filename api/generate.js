@@ -25,7 +25,8 @@ export default async function handler(req) {
 
   let body;
   try {
-    body = await req.json();
+    const raw = await req.text();
+    body = JSON.parse(raw);
   } catch {
     return new Response(JSON.stringify({ error: 'Invalid JSON' }), {
       status: 400,
@@ -33,20 +34,13 @@ export default async function handler(req) {
     });
   }
 
-  const { prompt, stream } = body;
+  const { prompt } = body;
   if (!prompt) {
     return new Response(JSON.stringify({ error: 'Missing prompt' }), {
       status: 400,
       headers: { ...CORS, 'Content-Type': 'application/json' },
     });
   }
-
-  const anthropicBody = {
-    model: MODEL,
-    max_tokens: MAX_TOKENS,
-    stream: !!stream,
-    messages: [{ role: 'user', content: prompt }],
-  };
 
   const anthropicRes = await fetch(ANTHROPIC_URL, {
     method: 'POST',
@@ -55,7 +49,11 @@ export default async function handler(req) {
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
     },
-    body: JSON.stringify(anthropicBody),
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: MAX_TOKENS,
+      messages: [{ role: 'user', content: prompt }],
+    }),
   });
 
   if (!anthropicRes.ok) {
@@ -66,44 +64,13 @@ export default async function handler(req) {
     });
   }
 
-  if (stream) {
-    const { readable, writable } = new TransformStream();
-    const writer = writable.getWriter();
-    const encoder = new TextEncoder();
-
-    (async () => {
-      const reader = anthropicRes.body.getReader();
-      const decoder = new TextDecoder();
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          await writer.write(encoder.encode(decoder.decode(value, { stream: true })));
-        }
-        await writer.write(encoder.encode('data: [DONE]\n\n'));
-      } catch {
-      } finally {
-        writer.close();
-      }
-    })();
-
-    return new Response(readable, {
-      headers: {
-        ...CORS,
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      },
-    });
-  }
-
   const data = await anthropicRes.json();
   const text = (data.content || [])
     .filter((b) => b.type === 'text')
     .map((b) => b.text)
     .join('');
 
-  return new Response(JSON.stringify({ content: text }), {
+  return new Response(JSON.stringify({ result: text }), {
     headers: { ...CORS, 'Content-Type': 'application/json' },
   });
 }
